@@ -17,6 +17,7 @@ class CurrentUser(BaseModel):
     college_admin_college: Optional[str] = None  # الكلية التي يديرها
     is_hod: bool = False
     is_doc: bool = False                 # 👈 جديد: طبيب الكلية
+    doctor_college: Optional[str] = None  # 👈 الكلية التي يعمل فيها الطبيب
     hod_college: Optional[str] = None
 
 
@@ -31,6 +32,7 @@ def _map_user(u: User) -> CurrentUser:
         college_admin_college=getattr(u, "college_admin_college", None),
         is_hod=bool(u.is_hod),
         is_doc=bool(getattr(u, "is_doc", False)),  # 👈 جديد
+        doctor_college=getattr(u, "doctor_college", None),  # 👈 جديد
         hod_college=u.hod_college,
     )
 
@@ -85,11 +87,11 @@ def require_user(user: Optional[CurrentUser] = Depends(get_current_user)) -> Cur
 
 
 def require_admin(user: CurrentUser = Depends(require_user)) -> CurrentUser:
-    """يتطلب سوبر أدمن أو أدمن كلية"""
-    if not (user.is_admin or user.is_college_admin):
+    """يتطلب سوبر أدمن أو أدمن كلية أو طبيب (للوصول إلى لوحة التحكم الخاصة بهم)"""
+    if not (user.is_admin or user.is_college_admin or user.is_doc):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="هذه الصفحة للأدمن فقط",
+            detail="هذه الصفحة للأدمن والأطباء فقط",
         )
     return user
 

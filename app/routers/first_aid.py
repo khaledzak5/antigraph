@@ -9,8 +9,9 @@ from io import BytesIO
 import qrcode
 
 from ..database import get_db
-from ..deps_auth import require_doc
+from ..deps_auth import require_doc, get_current_user
 from ..models import FirstAidBox, FirstAidBoxItem
+from ..utils_college import get_user_college, filter_by_college, prevent_cross_college_access
 
 router = APIRouter(prefix="/first-aid", tags=["FirstAid"])
 templates = Jinja2Templates(directory="app/templates")
@@ -50,9 +51,21 @@ def box_public_detail(request: Request, box_id: int, db: Session = Depends(get_d
 
 # ===================== الداشبورد الرئيسي =====================
 @router.get("/", include_in_schema=False)
-def fa_index(request: Request, user=Depends(require_doc), db: Session = Depends(get_db)):
+def fa_index(
+    request: Request,
+    user=Depends(require_doc),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """الصفحة الرئيسية للإسعافات"""
-    boxes = db.query(FirstAidBox).all()
+    # الحصول على كلية المستخدم
+    user_college = get_user_college(current_user)
+    
+    # فلترة الصناديق حسب الكلية
+    query = db.query(FirstAidBox)
+    query = filter_by_college(query, FirstAidBox, current_user)
+    boxes = query.all()
+    
     return templates.TemplateResponse("first_aid/index.html", {
         "request": request,
         "boxes": boxes,
@@ -61,9 +74,21 @@ def fa_index(request: Request, user=Depends(require_doc), db: Session = Depends(
 
 # ===================== قائمة الصناديق =====================
 @router.get("/boxes")
-def boxes_list(request: Request, user=Depends(require_doc), db: Session = Depends(get_db)):
-    """قائمة جميع صناديق الإسعافات"""
-    boxes = db.query(FirstAidBox).all()
+def boxes_list(
+    request: Request,
+    user=Depends(require_doc),
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """قائمة جميع صناديق الإسعافات الخاصة بالكلية"""
+    # الحصول على كلية المستخدم
+    user_college = get_user_college(current_user)
+    
+    # فلترة الصناديق حسب الكلية
+    query = db.query(FirstAidBox)
+    query = filter_by_college(query, FirstAidBox, current_user)
+    boxes = query.all()
+    
     return templates.TemplateResponse("first_aid/boxes_list.html", {
         "request": request,
         "boxes": boxes
@@ -82,15 +107,23 @@ def boxes_create_form(request: Request, user=Depends(require_doc)):
 def boxes_create(
     request: Request,
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     box_name: str = Form(...),
     location: str = Form(...)
 ):
     """إنشاء صندوق إسعافات جديد"""
     try:
+        # الحصول على كلية المستخدم
+        user_college = get_user_college(current_user)
+        
+        if not user_college:
+            raise HTTPException(status_code=403, detail="لا يمكن إنشاء صندوق بدون تخصيص كلية")
+        
         new_box = FirstAidBox(
             box_name=box_name,
             location=location,
+            college_id=user_college,  # حفظ كلية الطبيب
             created_by_user_id=user.id
         )
         db.add(new_box)
@@ -108,17 +141,19 @@ def box_detail(
     box_id: int,
     msg: str = Query(default=None),
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """عرض تفاصيل صندوق معين"""
     from datetime import date
-    import base64
-    from io import BytesIO
-    import qrcode
     
     box = db.query(FirstAidBox).filter(FirstAidBox.id == box_id).first()
     if not box:
         raise HTTPException(status_code=404, detail="الصندوق غير موجود")
+    
+    # التحقق من الوصول بناءً على الكلية
+    if box.college_id:
+        prevent_cross_college_access(current_user, box.college_id)
     
     # تحديث آخر تاريخ مراجعة عند الدخول على الصندوق
     box.last_reviewed_at = datetime.now()
@@ -154,6 +189,7 @@ def add_item_form(
     box_id: int,
     error: str = Query(default=None),
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """نموذج إضافة دواء للصندوق"""
@@ -161,25 +197,31 @@ def add_item_form(
     if not box:
         raise HTTPException(status_code=404, detail="الصندوق غير موجود")
     
-    # جلب قائمة الأدوية من الصيدلية (من Excel) مع الكميات المتوفرة
-    try:
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-        from excel_data_reference import get_all_drugs, get_drug_stock
-        
-        drugs = get_all_drugs()
-        
-        # إضافة كمية المتوفر لكل دواء
-        for drug in drugs:
-            try:
-                stock = get_drug_stock(str(drug.get('id')))
-                drug['available_quantity'] = stock.get('stock_qty', 0) if stock else 0
-            except Exception:
-                drug['available_quantity'] = 0
-    except Exception:
-        drugs = []
+    # التحقق من الوصول بناءً على الكلية
+    if box.college_id:
+        prevent_cross_college_access(current_user, box.college_id)
     
+    # جلب قائمة الأدوية من قاعدة البيانات مع الكميات المتوفرة، مفلترة حسب الطبيب الحالي فقط
+    drugs = []
+    if current_user and current_user.doctor_college:
+        rows = db.execute(text('''
+            SELECT d.id, d.trade_name, d.generic_name, d.strength, d.form, d.unit,
+                   COALESCE(ps.balance_qty,0) AS available_quantity
+            FROM drugs d
+            LEFT JOIN pharmacy_stock ps ON ps.drug_id = d.id
+            WHERE d.is_active=TRUE AND d.college_id=:college_id AND d.created_by=:user_id
+            ORDER BY d.trade_name
+        '''), {"college_id": current_user.doctor_college, "user_id": current_user.id}).mappings().all()
+        for row in rows:
+            drugs.append({
+                "id": row["id"],
+                "trade_name": row["trade_name"],
+                "generic_name": row["generic_name"],
+                "strength": row["strength"],
+                "form": row["form"],
+                "unit": row["unit"],
+                "available_quantity": row["available_quantity"] or 0
+            })
     return templates.TemplateResponse("first_aid/add_item.html", {
         "request": request,
         "box": box,
@@ -192,6 +234,7 @@ def add_item(
     request: Request,
     box_id: int,
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
     drug_name: str = Form(...),
     drug_code: str = Form(default=None),
@@ -202,9 +245,19 @@ def add_item(
 ):
     """إضافة دواء للصندوق"""
     try:
+        # الحصول على كلية المستخدم
+        user_college = get_user_college(current_user)
+        
+        if not user_college:
+            raise HTTPException(status_code=403, detail="لا يمكن إضافة دواء بدون تخصيص كلية")
+        
         box = db.query(FirstAidBox).filter(FirstAidBox.id == box_id).first()
         if not box:
             raise HTTPException(status_code=404, detail="الصندوق غير موجود")
+        
+        # التحقق من الوصول بناءً على الكلية
+        if box.college_id:
+            prevent_cross_college_access(current_user, box.college_id)
         
         # التحقق من أن الكمية لا تتجاوز الحد المتاح في الصيدلية
         if drug_code:
@@ -238,6 +291,7 @@ def add_item(
         
         new_item = FirstAidBoxItem(
             box_id=box_id,
+            college_id=user_college,  # تعيين الكلية تلقائياً
             drug_name=drug_name,
             drug_code=drug_code,
             quantity=quantity,
@@ -262,21 +316,43 @@ def add_item(
                 if drug_row:
                     drug_id = drug_row[0]
                     
-                    # 2. خصم من رصيد المخزن (warehouse)
-                    db.execute(text('''
-                        UPDATE warehouse_stock
-                        SET balance_qty = balance_qty - :qty,
-                            last_updated = CURRENT_TIMESTAMP
-                        WHERE drug_id = :did
-                    '''), {'qty': quantity, 'did': drug_id})
+                    # 2. تحديث أو إدراج في المخزن (warehouse) مع حفظ الكلية
+                    existing_warehouse = db.execute(text(
+                        'SELECT id FROM warehouse_stock WHERE drug_id = :did'
+                    ), {'did': drug_id}).fetchone()
                     
-                    # 3. خصم من رصيد الصيدلية (pharmacy) أيضاً
-                    db.execute(text('''
-                        UPDATE pharmacy_stock
-                        SET balance_qty = balance_qty - :qty,
-                            last_updated = CURRENT_TIMESTAMP
-                        WHERE drug_id = :did
-                    '''), {'qty': quantity, 'did': drug_id})
+                    if existing_warehouse:
+                        db.execute(text('''
+                            UPDATE warehouse_stock
+                            SET balance_qty = balance_qty - :qty,
+                                college = :college,
+                                last_updated = CURRENT_TIMESTAMP
+                            WHERE drug_id = :did
+                        '''), {'qty': quantity, 'did': drug_id, 'college': user_college})
+                    else:
+                        db.execute(text('''
+                            INSERT INTO warehouse_stock (drug_id, balance_qty, college)
+                            VALUES (:did, :qty, :college)
+                        '''), {'did': drug_id, 'qty': -quantity, 'college': user_college})
+                    
+                    # 3. تحديث أو إدراج في الصيدلية (pharmacy) مع حفظ الكلية
+                    existing_pharmacy = db.execute(text(
+                        'SELECT id FROM pharmacy_stock WHERE drug_id = :did'
+                    ), {'did': drug_id}).fetchone()
+                    
+                    if existing_pharmacy:
+                        db.execute(text('''
+                            UPDATE pharmacy_stock
+                            SET balance_qty = balance_qty - :qty,
+                                college = :college,
+                                last_updated = CURRENT_TIMESTAMP
+                            WHERE drug_id = :did
+                        '''), {'qty': quantity, 'did': drug_id, 'college': user_college})
+                    else:
+                        db.execute(text('''
+                            INSERT INTO pharmacy_stock (drug_id, balance_qty, college)
+                            VALUES (:did, :qty, :college)
+                        '''), {'did': drug_id, 'qty': -quantity, 'college': user_college})
                     
                     # 4. سجل الحركة في جدول حركات الأدوية
                     db.execute(text('''
@@ -316,10 +392,19 @@ def delete_item(
     box_id: int,
     item_id: int,
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """حذف دواء من الصندوق وإرجاع الكمية للمخزن"""
     try:
+        # التحقق من الوصول للصندوق أولاً
+        box = db.query(FirstAidBox).filter(FirstAidBox.id == box_id).first()
+        if not box:
+            raise HTTPException(status_code=404, detail="الصندوق غير موجود")
+        
+        if box.college_id:
+            prevent_cross_college_access(current_user, box.college_id)
+        
         item = db.query(FirstAidBoxItem).filter(
             FirstAidBoxItem.id == item_id,
             FirstAidBoxItem.box_id == box_id

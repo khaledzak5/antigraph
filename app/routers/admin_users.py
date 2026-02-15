@@ -163,6 +163,7 @@ def user_create(
     is_hod_f: Optional[str] = Form(None),
     hod_college: Optional[str] = Form(None),
     is_doc_f: Optional[str] = Form(None),
+    doctor_college: Optional[str] = Form(None),
     head_user_department_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     cu=Depends(require_user_manager),
@@ -297,6 +298,36 @@ def user_create(
             status_code=status.HTTP_400_BAD_REQUEST,
         )
 
+    # التحقق من الطبيب واختيار الكلية
+    doctor_college_norm = normalize_text(doctor_college)
+    if is_doc:
+        if not doctor_college_norm:
+            return templates.TemplateResponse(
+                "admin/user_form.html",
+                {
+                    "request": request,
+                    "mode": "create",
+                    "user": None,
+                    "colleges": colleges,
+                    "departments": departments,
+                    "error": "الرجاء اختيار الكلية للطبيب."
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if doctor_college_norm not in colleges:
+            return templates.TemplateResponse(
+                "admin/user_form.html",
+                {
+                    "request": request,
+                    "mode": "create",
+                    "user": None,
+                    "colleges": colleges,
+                    "departments": departments,
+                    "error": "قيمة الكلية غير صحيحة. الرجاء الاختيار من القائمة."
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
     if is_hod:
         if not selected_college:
             return templates.TemplateResponse(
@@ -363,6 +394,7 @@ def user_create(
             college_admin_college=college_admin_college_norm if is_college_admin else None,
             is_hod=is_hod,
             is_doc=is_doc,
+            doctor_college=doctor_college_norm if is_doc else None,
             hod_college=selected_college,
             is_active=True,
             must_change_password=True,
@@ -429,6 +461,8 @@ def user_update(
     college_admin_college: Optional[str] = Form(None),
     is_hod_f: Optional[str] = Form(None),
     hod_college: Optional[str] = Form(None),
+    is_doc_f: Optional[str] = Form(None),
+    doctor_college: Optional[str] = Form(None),
     head_user_department_id: Optional[str] = Form(None),
     db: Session = Depends(get_db),
     admin=Depends(require_admin),
@@ -497,11 +531,44 @@ def user_update(
             },
             status_code=status.HTTP_400_BAD_REQUEST,
         )
+
+    # التحقق من الطبيب واختيار الكلية
+    is_doc = to_bool(is_doc_f)
+    doctor_college_norm = normalize_text(doctor_college)
+    if is_doc:
+        if not doctor_college_norm:
+            return templates.TemplateResponse(
+                "admin/user_form.html",
+                {
+                    "request": request,
+                    "mode": "edit",
+                    "user": user,
+                    "colleges": colleges,
+                    "departments": departments,
+                    "error": "الرجاء اختيار الكلية للطبيب."
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+        if doctor_college_norm not in colleges:
+            return templates.TemplateResponse(
+                "admin/user_form.html",
+                {
+                    "request": request,
+                    "mode": "edit",
+                    "user": user,
+                    "colleges": colleges,
+                    "departments": departments,
+                    "error": "قيمة الكلية غير صحيحة. الرجاء الاختيار من القائمة."
+                },
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
     
     user.is_admin = is_admin
     user.is_college_admin = is_college_admin
     user.college_admin_college = college_admin_college_norm if is_college_admin else None
     user.is_hod   = is_hod
+    user.is_doc = is_doc
+    user.doctor_college = doctor_college_norm if is_doc else None
 
     if is_hod:
         if not selected_college:

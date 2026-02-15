@@ -132,6 +132,7 @@ class User(Base):
     college_admin_college = Column(String(255), nullable=True)  # الكلية التي يديرها أدمن الكلية
     is_hod = Column(Boolean, default=False, nullable=False)      # رئيس قسم؟
     is_doc = Column(Boolean, default=False, nullable=False)      # 👈 طبيب الكلية (جديد)
+    doctor_college = Column(String(255), nullable=True)          # الكلية التي يعمل فيها الطبيب
     hod_college = Column(String(255), nullable=True)             # كلية رئيس القسم (إن وُجد)
 
     is_active = Column(Boolean, default=True, nullable=False)
@@ -143,6 +144,15 @@ class User(Base):
         "Department",
         back_populates="head_user",
         foreign_keys="Department.head_user_id",
+        lazy="selectin",
+    )
+    
+    # Login logs - cascade delete is handled by database
+    login_logs = relationship(
+        "LoginLog",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
         lazy="selectin",
     )
 
@@ -158,7 +168,8 @@ class LoginLog(Base):
     login_at = Column(DateTime, server_default=func.now(), nullable=False)
     ip_address = Column(String(50), nullable=True)
 
-    user = relationship("User", backref="login_logs")
+    # Use back_populates with passive_deletes to let database handle cascade
+    user = relationship("User", back_populates="login_logs", passive_deletes=True)
 
     __table_args__ = (
         Index("idx_login_logs_user_id", "user_id"),
@@ -298,6 +309,7 @@ class FirstAidBox(Base):
     id = Column(Integer, primary_key=True, index=True)
     box_name = Column(String(255), nullable=False)  # اسم الصندوق (مثلاً: "صندوق العيادة")
     location = Column(String(255), nullable=False)  # مكان الصندوق
+    college_id = Column(String(255), nullable=True)  # الكلية التي ينتمي إليها الصندوق
     created_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -308,6 +320,7 @@ class FirstAidBox(Base):
 
     __table_args__ = (
         Index("idx_first_aid_box_location", "location"),
+        Index("idx_first_aid_box_college", "college_id"),
     )
 
 
@@ -319,6 +332,7 @@ class FirstAidBoxItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     box_id = Column(Integer, ForeignKey("first_aid_boxes.id", ondelete="CASCADE"), nullable=False)
+    college_id = Column(String(255), nullable=True)  # الكلية (يُرث من الصندوق)
     drug_name = Column(String(255), nullable=False)  # اسم الدواء/المادة
     drug_code = Column(String(100), nullable=True)  # رمز الدواء من الصيدلية
     quantity = Column(Integer, nullable=False, default=0)  # الكمية المتوفرة
@@ -334,6 +348,7 @@ class FirstAidBoxItem(Base):
     __table_args__ = (
         Index("idx_first_aid_item_box", "box_id"),
         Index("idx_first_aid_item_drug", "drug_code"),
+        Index("idx_first_aid_item_college", "college_id"),
     )
 
 

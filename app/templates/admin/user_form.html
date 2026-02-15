@@ -130,6 +130,20 @@
           <input type="checkbox" name="is_doc_f" id="is_doc_checkbox" {% if user and user.is_doc %}checked{% endif %}{% if role_ctx.get('is_hod') and mode=='create' %} checked{% endif %}>
           <span>طبيب</span>
         </label>
+        <div id="doctor_college_field" style="margin-top:8px; {% if not (user and user.is_doc) %}display:none;{% endif %}">
+          <label><span>الكلية <span style="color:#e00">*</span></span>
+            <select name="doctor_college" id="doctor_college_select" {% if user and user.is_doc or is_doc_f %}required{% endif %}>
+              <option value="">-- اختر الكلية --</option>
+              {% for c in colleges or [] %}
+                <option value="{{ c }}"
+                  {% if (user and user.doctor_college and user.doctor_college|trim == c) %}selected{% endif %}>
+                  {{ c }}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="hint">يجب اختيار الكلية من القائمة. لا يمكن تعيين طبيب لكلية غير موجودة.</div>
+        </div>
         <div class="hint">رخصة الطبيب تمنح صلاحيات العيادة والصيدلية والمخزون.</div>
       </div>
     </div>
@@ -224,6 +238,22 @@
         collegeAdminCheckbox.checked = false;
         if (collegeAdminField) collegeAdminField.style.display = 'none';
         if (collegeAdminSelect) collegeAdminSelect.value = "";
+      }
+    });
+  }
+
+  // إظهار/إخفاء حقل الكلية للطبيب
+  const docCheckbox = document.getElementById('is_doc_checkbox');
+  const docCollegeField = document.getElementById('doctor_college_field');
+  const docCollegeSelect = document.getElementById('doctor_college_select');
+
+  if (docCheckbox) {
+    docCheckbox.addEventListener('change', function() {
+      if (docCollegeField) {
+        docCollegeField.style.display = this.checked ? 'block' : 'none';
+        if (!this.checked && docCollegeSelect) {
+          docCollegeSelect.value = "";
+        }
       }
     });
   }

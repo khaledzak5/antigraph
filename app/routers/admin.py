@@ -49,6 +49,64 @@ def admin_home(request: Request, db: Session = Depends(get_db), msg: Optional[st
             {"request": request, "stats": stats, "msg": msg}
         )
     
+    # إذا كان طبيب، نعرض له الصفحة الخاصة به مع إحصائيات كليته فقط
+    if cu and cu.get('is_doc'):
+        from ..deps_auth import get_current_user
+        from ..utils_college import get_user_college
+        current_user = get_current_user(request, db)
+        user_college = get_user_college(current_user)
+        
+        if not user_college:
+            # الطبيب لم يتم تعيينه إلى كلية بعد
+            stats = {
+                "message": "لم يتم تعيينك إلى أي كلية بعد",
+                "users": 0,
+                "departments": 0,
+                "courses": 0,
+                "visits": 0,
+            }
+        else:
+            # عدد الأقسام في الكلية الخاصة بالطبيب
+            dept_count = db.query(Department).filter(Department.college == user_college).count()
+            
+            # عدد الدورات في الكلية
+            dept_names = [d.name for d in db.query(Department).filter(Department.college == user_college).all()]
+            if dept_names:
+                course_count = db.query(Course).join(Course.targets).filter(CourseTargetDepartment.department_name.in_(dept_names)).distinct().count()
+            else:
+                course_count = 0
+            
+            # عدد المراجعين (من clinic_patients)
+            try:
+                from ..database import is_sqlite
+                if is_sqlite():
+                    visits_count = db.execute(text("""
+                        SELECT COUNT(*) as cnt 
+                        FROM clinic_patients 
+                        WHERE record_kind = 'visit'
+                    """)).scalar()
+                else:
+                    visits_count = db.execute(text("""
+                        SELECT COUNT(*) as cnt 
+                        FROM clinic_patients 
+                        WHERE record_kind = 'visit'
+                    """)).scalar()
+                visits_count = visits_count or 0
+            except Exception:
+                visits_count = 0
+            
+            stats = {
+                "college": user_college,
+                "departments": dept_count,
+                "courses": course_count,
+                "visits": visits_count,
+            }
+        
+        return templates.TemplateResponse(
+            "admin/doctor_dashboard.html",
+            {"request": request, "stats": stats, "msg": msg}
+        )
+    
     # الإحصائيات الأساسية للأدمن العام
     from ..models import CourseEnrollment
     

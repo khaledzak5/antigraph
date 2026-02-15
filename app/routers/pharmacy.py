@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional, Any, Dict, List
 from ..database import get_db, is_sqlite
-from ..deps_auth import require_doc
+from ..deps_auth import require_doc, get_current_user
 from fastapi.templating import Jinja2Templates
 
 router = APIRouter(prefix="/clinic/pharmacy", tags=["Clinic-Pharmacy"])
@@ -153,6 +153,7 @@ def pharmacy_home(request: Request, db: Session = Depends(get_db)):
             dependencies=[Depends(require_doc)])
 def drugs_list(request: Request,
                q: Optional[str] = Query(default=None),
+               current_user = Depends(get_current_user),
                db: Session = Depends(get_db)):
     rows = []
     
@@ -160,6 +161,12 @@ def drugs_list(request: Request,
         # محاولة من قاعدة البيانات أولاً
         where = "WHERE d.is_active=TRUE"
         params = {}
+        
+        # Filter by college_id if user is a doctor
+        if current_user and current_user.doctor_college:
+            where += " AND d.college_id=:college_id"
+            params["college_id"] = current_user.doctor_college
+        
         if q:
             if is_sqlite():
                 where += " AND (UPPER(d.trade_name) LIKE UPPER(:q) OR UPPER(d.generic_name) LIKE UPPER(:q) OR UPPER(COALESCE(d.manufacturer,'')) LIKE UPPER(:q))"
@@ -224,22 +231,36 @@ def drugs_create(request: Request,
                  form: Optional[str] = Form(default=None),
                  manufacturer: Optional[str] = Form(default=None),
                  unit: Optional[str] = Form(default=None),
+                 current_user = Depends(get_current_user),
                  db: Session = Depends(get_db)):
     try:
+        # Ensure user is a doctor and has a college
+        if not (current_user and current_user.is_doc and current_user.doctor_college):
+            return _fail("يجب أن تكون طبيباً منتسباً لكلية لإنشاء أدوية", code=403)
+        
         table_name = "public.drugs" if not is_sqlite() else "drugs"
         # توليد drug_code تلقائياً من الاسم التجاري
         import uuid
         drug_code = f"DRUG-{uuid.uuid4().hex[:8].upper()}"
         
+        # DEBUG: Log the college assignment
+        print(f"DEBUG: Creating medicine for doctor {current_user.username}")
+        print(f"DEBUG: Doctor college_id: {current_user.doctor_college}")
+        
         db.execute(text(f"""
-            INSERT INTO {table_name} (drug_code, trade_name, generic_name, strength, form, manufacturer, unit, is_active, created_by)
-            VALUES (:dc, :tn, :gn, :st, :fm, :m, :u, TRUE, :uid)
+            INSERT INTO {table_name} (drug_code, trade_name, generic_name, strength, form, manufacturer, unit, is_active, created_by, college_id)
+            VALUES (:dc, :tn, :gn, :st, :fm, :m, :u, TRUE, :uid, :college_id)
         """), {"dc": drug_code, "tn": trade_name.strip(), "gn": _clean(generic_name), "st": _clean(strength),
-               "fm": _clean(form), "m": _clean(manufacturer), "u": _clean(unit), "uid": _uid(request)})
+               "fm": _clean(form), "m": _clean(manufacturer), "u": _clean(unit), "uid": current_user.id, "college_id": current_user.doctor_college})
         db.commit()
+        
+        # DEBUG: Log the created medicine
+        print(f"DEBUG: Medicine created with college_id: {current_user.doctor_college}")
+        
         return RedirectResponse(url="/clinic/pharmacy/drugs?msg=added", status_code=303)
     except Exception as ex:
         db.rollback()
+        print(f"DEBUG: Error creating medicine: {ex}")
         return _fail(str(ex))
 
 @router.post("/drugs/update",
@@ -634,21 +655,37 @@ def movement_adjust(request: Request,
 
 # ================== Autocomplete / Dropdown ==================
 @router.get("/drugs/search", dependencies=[Depends(require_doc)])
-def drugs_search(q: str = "", db: Session = Depends(get_db)):
+def drugs_search(q: str = "", current_user = Depends(get_current_user), db: Session = Depends(get_db)):
     s = (q or "").strip()
     
     # إذا كانت الـ query فارغة، أرجع كل الأدوية النشطة
     if not s:
+        where = "WHERE is_active=TRUE"
+        params = {}
+        
+        # Filter by college_id if user is a doctor
+        if current_user and current_user.doctor_college:
+            where += " AND college_id=:college_id"
+            params["college_id"] = current_user.doctor_college
+        
         rows = db.execute(text(f"""
             SELECT id, trade_name, generic_name, strength, form,
                    COALESCE(manufacturer,'') AS manufacturer
             FROM {'public.drugs' if not is_sqlite() else 'drugs'}
-            WHERE is_active=TRUE
+            {where}
             ORDER BY trade_name
             LIMIT 100
-        """)).mappings().all()
+        """), params).mappings().all()
     else:
         # استخدام LIKE مع UPPER في SQLite، أو ILIKE في PostgreSQL
+        where = ""
+        params = {"q": f"%{s}%"}
+        
+        # Filter by college_id if user is a doctor
+        if current_user and current_user.doctor_college:
+            where = "AND college_id=:college_id"
+            params["college_id"] = current_user.doctor_college
+        
         if is_sqlite():
             like_clause = """
                 UPPER(trade_name) LIKE UPPER(:q) OR
@@ -666,10 +703,10 @@ def drugs_search(q: str = "", db: Session = Depends(get_db)):
                    COALESCE(manufacturer,'') AS manufacturer
             FROM {'public.drugs' if not is_sqlite() else 'drugs'}
             WHERE is_active=TRUE
-              AND ({like_clause})
+              AND ({like_clause}) {where}
             ORDER BY trade_name
             LIMIT 20
-        """), {"q": f"%{s}%"}).mappings().all()
+        """), params).mappings().all()
     
     items = []
     for r in rows:

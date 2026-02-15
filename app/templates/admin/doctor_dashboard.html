@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block breadcrumb %}
+  <a href="/admin/">لوحة الطبيب</a>
+{% endblock %}
+{% block content %}
+<section class="card card-prestige">
+  <div class="card-head"><div class="card-icon">🏥</div><h3>لوحة التحكم – الطبيب</h3></div>
+  {% if stats.message %}
+    <div class="alert alert-warning">
+      {{ stats.message }}
+    </div>
+  {% else %}
+    <div class="grid" style="grid-template-columns:repeat(4,1fr);gap:12px;">
+      <div class="kpi-box">
+        <div class="kpi-title">الكلية</div>
+        <div class="kpi-value">{{ stats.college }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-title">الأقسام</div>
+        <div class="kpi-value">{{ stats.departments }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-title">الدورات</div>
+        <div class="kpi-value">{{ stats.courses }}</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-title">المراجعات</div>
+        <div class="kpi-value">{{ stats.visits }}</div>
+      </div>
+    </div>
+  {% endif %}
+</section>
+
+<section class="card card-prestige">
+  <div class="card-head"><div class="card-icon">⚕️</div><h3>خدمات العيادة</h3></div>
+  <p class="muted">إدارة زيارات العيادة والمرضى:</p>
+  <div class="card-grid">
+    <a class="action-card" href="/clinic/">
+      <div class="icon">🏥</div>
+      <div class="title">زيارات العيادة</div>
+      <div class="desc">تسجيل ومتابعة زيارات المرضى والعلاجات والإحالات.</div>
+    </a>
+    <a class="action-card" href="/clinic/patients">
+      <div class="icon">👨‍⚕️</div>
+      <div class="title">بيانات المرضى</div>
+      <div class="desc">عرض وتحديث معلومات المرضى المسجلين في العيادة.</div>
+    </a>
+    <a class="action-card" href="/clinic/referrals">
+      <div class="icon">📤</div>
+      <div class="title">الإحالات</div>
+      <div class="desc">عرض الإحالات الخاصة بك وطباعة المستندات.</div>
+    </a>
+  </div>
+</section>
+
+<section class="card card-prestige">
+  <div class="card-head"><div class="card-icon">💊</div><h3>خدمات الصيدلية</h3></div>
+  <p class="muted">إدارة الأدوية والمخزون:</p>
+  <div class="card-grid">
+    <a class="action-card" href="/inventory/">
+      <div class="icon">📦</div>
+      <div class="title">المخزون</div>
+      <div class="desc">عرض مستويات المخزون وتسجيل حركات الأدوية.</div>
+    </a>
+    <a class="action-card" href="/pharmacy/">
+      <div class="icon">⚗️</div>
+      <div class="title">الصيدلية</div>
+      <div class="desc">إدارة توزيع الأدوية والحركات المختلفة.</div>
+    </a>
+    <a class="action-card" href="/first-aid/">
+      <div class="icon">🩹</div>
+      <div class="title">صناديق الإسعافات</div>
+      <div class="desc">إدارة صناديق الإسعافات الأولية والأدوية الطارئة.</div>
+    </a>
+  </div>
+</section>
+
+<section class="card card-prestige">
+  <div class="card-head"><div class="card-icon">⚙️</div><h3>الإعدادات والمعلومات</h3></div>
+  <div class="card-grid">
+    <a class="action-card" href="/profile/">
+      <div class="icon">👤</div>
+      <div class="title">ملفي الشخصي</div>
+      <div class="desc">عرض وتحديث معلومات حسابك الشخصية.</div>
+    </a>
+    <a class="action-card" href="/admin/login-activity">
+      <div class="icon">📋</div>
+      <div class="title">سجل الدخول</div>
+      <div class="desc">عرض تاريخ دخولك إلى النظام.</div>
+    </a>
+  </div>
+</section>
+
+{% endblock %}

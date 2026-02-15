@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from ..database import get_db
-from ..deps_auth import require_doc
+from ..deps_auth import require_doc, get_current_user
 from ..models import FirstAidBox
+from ..utils_college import get_user_college, filter_by_college, prevent_cross_college_access
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 templates = Jinja2Templates(directory="app/templates")
@@ -20,7 +21,7 @@ def stock_levels(request: Request, user=Depends(require_doc), db: Session = Depe
     return templates.TemplateResponse("inventory/stock_levels.html", {"request": request})
 
 @router.get("/alerts")
-def alerts_page(request: Request, user=Depends(require_doc), db: Session = Depends(get_db)):
+def alerts_page(request: Request, user=Depends(require_doc), current_user=Depends(get_current_user), db: Session = Depends(get_db)):
     """صفحة عرض تنبيهات الأدوية قريبة الانتهاء"""
     from datetime import datetime, timedelta
     
@@ -28,7 +29,14 @@ def alerts_page(request: Request, user=Depends(require_doc), db: Session = Depen
     today = datetime.now().date()
     soon = today + timedelta(days=30)  # تنبيه للأدوية التي تنتهي خلال 30 يوم
     
-    expiring_drugs = db.execute(text('''
+    # FILTER BY COLLEGE
+    college_filter = ""
+    params = {"soon": soon}
+    if current_user and current_user.doctor_college:
+        college_filter = "AND d.college_id=:college_id"
+        params["college_id"] = current_user.doctor_college
+    
+    expiring_drugs = db.execute(text(f'''
         SELECT DISTINCT
             d.id,
             d.trade_name,
@@ -42,8 +50,9 @@ def alerts_page(request: Request, user=Depends(require_doc), db: Session = Depen
         LEFT JOIN drug_transactions dt ON d.id = dt.drug_id
         WHERE dt.expiry_date IS NOT NULL
         AND (dt.expiry_date < DATE('now') OR dt.expiry_date <= DATE(:soon))
+        {college_filter}
         ORDER BY dt.expiry_date ASC
-    '''), {'soon': soon}).fetchall()
+    '''), params).fetchall()
     
     expiring_list = [
         {
@@ -69,11 +78,20 @@ def alerts_page(request: Request, user=Depends(require_doc), db: Session = Depen
 def dispense_drugs_page(
     request: Request,
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """صفحة صرف الأدوية من المستودع لصناديق الإسعافات"""
-    # جلب جميع الأدوية مع أرصدتها
-    drugs_data = db.execute(text('''
+    user_college = get_user_college(current_user)
+    
+    # جلب جميع الأدوية مع أرصدتها - FILTER BY COLLEGE
+    where_college = ""
+    params = {}
+    if current_user and current_user.doctor_college:
+        where_college = "WHERE d.college_id=:college_id"
+        params["college_id"] = current_user.doctor_college
+    
+    drugs_data = db.execute(text(f'''
         SELECT 
             d.id,
             d.drug_code,
@@ -87,8 +105,9 @@ def dispense_drugs_page(
         FROM drugs d
         LEFT JOIN warehouse_stock ws ON d.id = ws.drug_id
         LEFT JOIN pharmacy_stock ps ON d.id = ps.drug_id
+        {where_college}
         ORDER BY d.trade_name
-    ''')).fetchall()
+    '''), params).fetchall()
     
     # تحويل النتائج إلى قائمة من القواميس
     drugs = [
@@ -106,8 +125,10 @@ def dispense_drugs_page(
         for row in drugs_data
     ]
     
-    # جلب جميع صناديق الإسعافات
-    boxes = db.query(FirstAidBox).all()
+    # جلب صناديق الإسعافات الخاصة بالكلية فقط
+    query = db.query(FirstAidBox)
+    query = filter_by_college(query, FirstAidBox, current_user)
+    boxes = query.all()
     
     return templates.TemplateResponse("inventory/stock_moves.html", {
         "request": request,
@@ -204,11 +225,19 @@ def stock_moves_page(
     request: Request,
     msg: str = Query(default=None),
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """صفحة موحدة لصرف وتوريد الأدوية"""
-    # جلب جميع الأدوية مع أرصدتها
-    drugs_data = db.execute(text('''
+    user_college = get_user_college(current_user)
+    
+    # جلب جميع الأدوية مع أرصدتها - FILTER BY COLLEGE
+    where_college = ""
+    params = {}
+    if current_user and current_user.doctor_college:
+        where_college = "WHERE d.college_id=:college_id"
+        params["college_id"] = current_user.doctor_college
+    drugs_data = db.execute(text(f'''
         SELECT 
             d.id,
             d.drug_code,
@@ -222,10 +251,9 @@ def stock_moves_page(
         FROM drugs d
         LEFT JOIN warehouse_stock ws ON d.id = ws.drug_id
         LEFT JOIN pharmacy_stock ps ON d.id = ps.drug_id
+        {where_college}
         ORDER BY d.trade_name
-    ''')).fetchall()
-    
-    # تحويل النتائج إلى قائمة من القواميس
+    '''), params).fetchall()
     drugs = [
         {
             'id': row[0],
@@ -241,8 +269,10 @@ def stock_moves_page(
         for row in drugs_data
     ]
     
-    # جلب جميع صناديق الإسعافات
-    boxes = db.query(FirstAidBox).all()
+    # جلب صناديق الإسعافات الخاصة بالكلية فقط
+    query = db.query(FirstAidBox)
+    query = filter_by_college(query, FirstAidBox, current_user)
+    boxes = query.all()
     
     return templates.TemplateResponse("inventory/stock_moves.html", {
         "request": request,
@@ -356,9 +386,12 @@ def supply_to_boxes_page(
     drug_id: int = Query(default=None),
     drug_name: str = Query(default=None),
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """صفحة إضافة أدوية لصناديق الإسعافات مباشرة من المستودع"""
+    user_college = get_user_college(current_user)
+    
     # جلب جميع الأدوية مع أرصدتها
     drugs_data = db.execute(text('''
         SELECT 
@@ -397,8 +430,10 @@ def supply_to_boxes_page(
         for row in drugs_data
     ]
     
-    # جلب جميع صناديق الإسعافات
-    boxes = db.query(FirstAidBox).all()
+    # جلب صناديق الإسعافات الخاصة بالكلية فقط
+    query = db.query(FirstAidBox)
+    query = filter_by_college(query, FirstAidBox, current_user)
+    boxes = query.all()
     
     # تاريخ اليوم لمقارنة الصلاحية
     from datetime import date
@@ -421,6 +456,7 @@ def process_supply_to_boxes(
     quantity: int = Form(...),
     expiry_date: str = Form(default=None),
     user=Depends(require_doc),
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """معالجة إضافة دواء مباشرة للصندوق من المستودع"""
@@ -437,6 +473,10 @@ def process_supply_to_boxes(
     box = db.query(FirstAidBox).filter(FirstAidBox.id == box_id).first()
     if not box:
         raise HTTPException(status_code=404, detail="الصندوق غير موجود")
+    
+    # التحقق من الوصول بناءً على الكلية
+    if box.college_id:
+        prevent_cross_college_access(current_user, box.college_id)
     
     # التحقق من الكمية المتاحة في المستودع
     warehouse_stock = db.execute(text('''
